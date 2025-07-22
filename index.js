@@ -1,70 +1,72 @@
 const path = require('path');
-const fs = require('fs');
 const express = require('express');
+const { MongoClient, ObjectId } = require('mongodb');
 const app = express();
 
 app.use(express.json());
 
-const DATA_FILE = path.join(__dirname, 'messages.json');
-let messages = [];
+// MongoDB Atlas connection
+const uri = "mongodb+srv://evanovichz88:osama123@vf-cash-db.yihegkk.mongodb.net/?retryWrites=true&w=majority&appName=vf-cash-db";
+const client = new MongoClient(uri);
+const dbName = "vf-cash-db";
+let messagesCollection;
 
-function loadMessages() {
-  if (fs.existsSync(DATA_FILE)) {
-    try {
-      messages = JSON.parse(fs.readFileSync(DATA_FILE));
-    } catch {
-      messages = [];
+async function connectDb() {
+  await client.connect();
+  const db = client.db(dbName);
+  messagesCollection = db.collection("messages");
+  console.log("✅ Connected to MongoDB Atlas!");
+}
+connectDb();
+
+// 🟢 جلب كل الرسائل
+app.get('/api/messages', async (req, res) => {
+  try {
+    const all = await messagesCollection.find({}).toArray();
+    res.json(all);
+  } catch (e) {
+    res.status(500).json({ error: "DB Error" });
+  }
+});
+
+// 🟢 إضافة رسالة جديدة
+app.post('/api/messages', async (req, res) => {
+  try {
+    const { sender, message, datetime } = req.body;
+    const doc = { sender, message, datetime };
+    await messagesCollection.insertOne(doc);
+    res.json({ success: true, msg: doc });
+  } catch (e) {
+    res.status(500).json({ error: "DB Error" });
+  }
+});
+
+// 🟢 حذف رسالة معينة بالـ id
+app.delete('/api/messages/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await messagesCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 1) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ success: false, error: "Message not found" });
     }
-  } else {
-    messages = [];
+  } catch (e) {
+    res.status(500).json({ error: "DB Error" });
   }
-}
-loadMessages();
+});
 
-// حذف الرسائل اللي بقالها أكتر من 6 ساعات
-function cleanOldMessages() {
-  const now = Date.now();
-  const sixHours = 6 * 60 * 60 * 1000;
-  const filtered = messages.filter(msg => {
-    if (!msg.datetime) return false;
-    const msgTime = new Date(msg.datetime).getTime();
-    return (now - msgTime) < sixHours;
+// 🟢 حذف تلقائي للرسائل الأقدم من 6 ساعات (كل ساعة)
+setInterval(async () => {
+  const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+  await messagesCollection.deleteMany({
+    datetime: { $lt: sixHoursAgo.toISOString() }
   });
-  if (filtered.length !== messages.length) {
-    messages = filtered;
-    fs.writeFileSync(DATA_FILE, JSON.stringify(messages, null, 2));
-  }
-}
-// كل 10 دقايق ينضف الرسائل القديمة
-setInterval(cleanOldMessages, 10 * 60 * 1000);
+  console.log("تم حذف الرسائل الأقدم من 6 ساعات تلقائيًا.");
+}, 60 * 60 * 1000); // كل ساعة
 
-// API: رجع كل الرسائل
-app.get('/api/messages', (req, res) => {
-  res.json(messages);
-});
-
-// API: أضف رسالة جديدة
-app.post('/api/messages', (req, res) => {
-  const { sender, message, datetime } = req.body;
-  const msg = { sender, message, datetime: datetime || new Date().toISOString() };
-  messages.push(msg);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(messages, null, 2));
-  res.json({ success: true, msg });
-});
-
-// API: حذف رسالة معينة (بالـindex في الأرج)
-app.delete('/api/messages/:index', (req, res) => {
-  const idx = parseInt(req.params.index, 10);
-  if (!isNaN(idx) && idx >= 0 && idx < messages.length) {
-    const removed = messages.splice(idx, 1)[0];
-    fs.writeFileSync(DATA_FILE, JSON.stringify(messages, null, 2));
-    res.json({ success: true, removed });
-  } else {
-    res.status(404).json({ success: false, error: "Message not found" });
-  }
-});
-
+// ======== تشغيل السيرفر ========
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`API server running at http://localhost:${PORT}`);
+  console.log(`🚀 API server running at http://localhost:${PORT}`);
 });
